@@ -1,4 +1,3 @@
-﻿  fat32_test.c
-c:\users\86188\documents\jobs\1004_os\fat32_filesystem\fat32_test\fat32_test\fat32_test.c(27): warning C4090: “函数”: 不同的“const”限定符
-  fat32_test.vcxproj -> C:\Users\86188\Documents\JOBs\1004_OS\FAT32_FileSystem\fat32_test\Debug\fat32_test.exe
-  fat32_test.vcxproj -> C:\Users\86188\Documents\JOBs\1004_OS\FAT32_FileSystem\fat32_test\Debug\fat32_test.pdb (Full PDB)
+﻿  xdisk.c
+  fat32_test.vcxproj -> C:\Users\86188\Documents\JOBs\1004_OS\FAT32_FileSystem\01_03\fat32_test\Debug\fat32_test.exe
+  fat32_test.vcxproj -> C:\Users\86188\Documents\JOBs\1004_OS\FAT32_FileSystem\01_03\fat32_test\Debug\fat32_test.pdb (Full PDB)

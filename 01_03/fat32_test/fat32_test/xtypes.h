@@ -12,6 +12,7 @@ typedef uint64_t u64_t;
 typedef enum _xfat_err_t {
 	FS_ERR_OK = 0,	//没有错误. (注意!是逗号结尾, 不是分号)
 	FS_ERR_IO = -1, //打开文件出错
+	FS_ERR_PARAM = -2, //参数错误, 例如传入的读取范围过大
 }xfat_err_t; //记得要写上xfat_err_t, 否则报错说: 需要设置声明
 
 #endif

@@ -12,34 +12,33 @@ static u32_t write_buffer[160 * 1024]; //160kb
 static u32_t read_buffer[160 * 1024];
 //1.2 定义测试函数, 测试四个接口:开关读写
 int disk_io_test(void) {
-	int err;//错误码
+	xfat_err_t err;//错误码
 	
 	//定义磁盘结构
 	xdisk_t disk_test;
-	
-	//初始化
-	disk_test.driver = &vdisk_driver; //将虚拟磁盘设置为disk_test的驱动driver
+
+	//1.3 删disk_test.driver = &vdisk_driver; //将虚拟磁盘设置为disk_test的驱动driver
 
 	//将读取缓存read_buffer清零
 	memset(read_buffer, 0, sizeof(read_buffer));
 
-	//调用驱动的打开接口
-	err = disk_test.driver->open(&disk_test, disk_path_test);
+	//1.3 改, 调用驱动的打开接口
+	err = xdisk_open(&disk_test, "vdisk_test", &vdisk_driver, (void*)disk_path_test);//加入了名字, 还有vdisk_driver的路径 //1.3 删err = disk_test.driver->open(&disk_test, disk_path_test);
 
 	if (err) { //不为零, 就是失败
 		printf("open disk failed.\n");
 		return -1;
 	}
 
-	//测试写的接口
-	err = disk_test.driver->write_sector(&disk_test, (u8_t*)write_buffer, 0, 2); //从0扇区开始, 写2个扇区, 记得吗, 一个扇区的大小是512(字节?)
+	//1.3 改, 测试写的接口
+	err = xdisk_write_sector(&disk_test, (u8_t*)write_buffer, 0, 2); //从0扇区开始, 写2个扇区, 记得吗, 一个扇区的大小是512(字节?)
 	if (err) {
 		printf("write disk failed.\n");
 		return -1;
 	}
 
-	//测试:读
-	err = disk_test.driver->read_sector(&disk_test, (u8_t*)read_buffer, 0, 2); //从0扇区开始, 写2个
+	//1.3 改, 测试:读
+	err = xdisk_read_sector(&disk_test, (u8_t*)read_buffer, 0, 2); //从0扇区开始, 写2个
 	if (err) {
 		printf("read disk failed.\n");
 		return -1;
@@ -53,8 +52,8 @@ int disk_io_test(void) {
 		return -1;
 	}
 
-	//最后关闭
-	err = disk_test.driver->close(&disk_test); 
+	//1.3 改, 最后关闭
+	err = xdisk_close(&disk_test); 
 	if (err) {
 		printf("close disk failed.\n");
 		return -1;

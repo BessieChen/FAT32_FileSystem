@@ -1,2 +1,7 @@
-﻿  fat32_test.vcxproj -> C:\Users\86188\Documents\JOBs\1004_OS\FAT32_FileSystem\02_02\fat32_test\Debug\fat32_test.exe
-  fat32_test.vcxproj -> C:\Users\86188\Documents\JOBs\1004_OS\FAT32_FileSystem\02_02\fat32_test\Debug\fat32_test.pdb (Full PDB)
+﻿  xfat.c
+  xdisk.c
+  fat32_test.c
+  driver.c
+  正在生成代码...
+  fat32_test.vcxproj -> C:\Users\86188\Documents\JOBs\1004_OS\FAT\FAT32_FileSystem\02_02\fat32_test\Debug\fat32_test.exe
+  fat32_test.vcxproj -> C:\Users\86188\Documents\JOBs\1004_OS\FAT\FAT32_FileSystem\02_02\fat32_test\Debug\fat32_test.pdb (Full PDB)

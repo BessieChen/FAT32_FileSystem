@@ -19,6 +19,14 @@ extern u8_t temp_buffer[512];
 //4.8 获取file所在的disk
 #define file_get_disk(file)		((file)->xfat->disk_part->disk)
 
+
+//4.10 给定簇号和簇内偏移, 求出绝对的扇区号
+u32_t to_phy_sector(xfat_t* xfat, u32_t cluster, u32_t cluster_offset) {
+	xdisk_t* disk = xfat_get_disk(xfat);
+	return cluster_first_sector(xfat, cluster) + to_sector(disk, cluster_offset);
+}
+
+
 //3.2 读取fat32分区的第二个部分: fat区, 把关键信息保留在xfat中
 static xfat_err_t parse_fat_header(xfat_t* xfat, dbr_t* dbr) //这里传入了保留区dbr的信息, 因为dbr其实是包括了fat区和数据区的信息的. 注意, xfat中只有xfat->disk_part是拥有数据的, 其余都是传地址取值
 {
@@ -992,10 +1000,24 @@ xfat_err_t xfile_seek(xfile_t* file, xfile_ssize_t offset, xfile_origin_t origin
 	return FS_ERR_OK;
 }
 
+//4.10 当前的簇号curr_cluster,还有簇内偏移curr_offset知道了之后. 移动move_btyes个字节之后, 我们要求出最终的簇号和簇内偏移
+xfat_err_t move_cluster_pos(xfat_t* xfat, u32_t curr_cluster, u32_t curr_offset, u32_t move_bytes, u32_t* next_cluster, u32_t* next_offset) {
+	if ((curr_cluster + curr_offset) >= xfat->cluster_byte_size) { //移动完之后, 超出一个簇. (注意这里==也算超出, 说明curr_cluster指向的是第一个未读取的元素)
+		xfat_err_t err = get_next_cluster(xfat, curr_cluster, next_cluster);
+		if (err < 0) return err;
 
-//4.10 找到下一个目录项
+		*next_offset = 0; //老师说, 在4.10为止, 我们这个函数只是服务于一个一个目录项的移动,所以如果 >= 超出簇, 肯定是offset = 0, 也就是簇的开头
+	}
+	else {
+		*next_cluster = curr_cluster;
+		*next_offset = curr_offset + move_bytes; //只是偏移更改
+	}
+	return FS_ERR_OK;
+}
+
+//4.10 找到下一个目录项 (这里找到的仅仅是type匹配的,还不一定是路径名一致)
 //其中type是我们想要的目录项的类型. start_cluster, start_offset指的是开始找的簇号和簇内偏移. found_cluster和found_offset是找到的目录项的簇号和粗内偏移. next_cluster和next_offset指的是下一个目录项的... . 最后一个参数是传地址取值(因为要取的值是一个地址,所以是两个**, 第一个*代表着传地址取值, 第二个*代表要取的内容也是一个地址)
-xfat_err_t get_next_diritem(xfat_t* xfat, u8_t type, u32_t start_cluster, u32_t start_offset, u32_t* found_cluster, u32_t* found_offset, u32_t* next_cluster, u32_t* next_offset, diritem_t** diritem) { 
+xfat_err_t get_next_diritem(xfat_t* xfat, u8_t type, u32_t start_cluster, u32_t start_offset, u32_t* found_cluster, u32_t* found_offset, u32_t* next_cluster, u32_t* next_offset, u8_t* temp_buffer, diritem_t** diritem) { 
 	
 	xfat_err_t err;
 	diritem_t* r_diritem;
@@ -1003,6 +1025,10 @@ xfat_err_t get_next_diritem(xfat_t* xfat, u8_t type, u32_t start_cluster, u32_t 
 	//判断当前的start_cluster是否有效
 	while (is_cluster_valid(start_cluster)) {
 		u32_t sector_offset;
+
+		//因为可能在第一轮while的时候,就找到了type,然后就返回了. 所以我们应该在可能返回之前,就把next_cluster和next_offset计算好. 至于要不要将curr_指向他们, 是确定不返回的时候, 才会做的
+		err = move_cluster_pos(xfat, start_cluster, start_offset, sizeof(diritem_t), next_cluster, next_offset);
+		if (err < 0) return err;
 
 		//因为我们读取的函数是只能用来读取一个扇区的. 但是start_offset是簇内偏移, 而不是扇区内的偏移. 所以我们要调节成扇区内的偏移
 		sector_offset = to_sector_offset(xfat_get_disk(xfat), start_offset);
@@ -1028,7 +1054,7 @@ xfat_err_t get_next_diritem(xfat_t* xfat, u8_t type, u32_t start_cluster, u32_t 
 			}
 			break;
 		case DIRITEM_NAME_FREE: //说明这个目录项是空闲的, 没有被文件或者目录使用的
-			if (type & DIRITEM_GET_FREE) { //如果我们要的目录项就是结束
+			if (type & DIRITEM_GET_FREE) { 
 				*diritem = r_diritem;
 				*found_cluster = start_cluster;
 				*found_offset = start_offset;
@@ -1036,7 +1062,7 @@ xfat_err_t get_next_diritem(xfat_t* xfat, u8_t type, u32_t start_cluster, u32_t 
 			}
 			break;
 		default: //表明这个目录项是被使用了, 被文件或者目录使用
-			if (type & DIRITEM_GET_USED) { //如果我们要的目录项就是结束
+			if (type & DIRITEM_GET_USED) {
 				*diritem = r_diritem;
 				*found_cluster = start_cluster;
 				*found_offset = start_offset;
@@ -1045,18 +1071,134 @@ xfat_err_t get_next_diritem(xfat_t* xfat, u8_t type, u32_t start_cluster, u32_t 
 			break;
 		}
 
-
 		//走到这里说明switch里面都是if没通过:也就是看到的目录项不是我们想要的
+		//这里为了下一轮while,我们要把start_更新.
 		start_cluster = *next_cluster;
 		start_offset = *next_offset;
 
 
 	}
+
+	//说明没有找到
+	*diritem = (diritem_t*)0;
+	return FS_ERR_EOF; //说明已经遍历到了结尾
 }
 
+//4.10 配置大小写
+static u8_t get_sfn_case_cfg(const char* new_name) { 
+	u8_t case_cfg; //保存原有的文件名的大小写配置
+	int name_len; //文件名长度
+	const char* ext_dot; //分隔符
+	const char* p;	//遍历指针
+	const char* source_name = new_name;
+
+	int ext_existed;//扩展名是否存在
+
+	//将dest_name全部清空, 不要填成0, 而是填空格
+	memset(new_name, ' ', SFN_LEN);
+
+	//跳过反斜杠, 因为上一层来的时候, 可能会有 aa/bb/cc/123.txt
+	while (is_path_sep(*source_name)) {
+		source_name++;
+	}
+	//出来while之后, source_name指向的那个字符, 会是非反斜杠
+
+	//判断点分隔符在哪里, 把文件名和扩展名分割开来
+	ext_dot = source_name; //初始化位my_name的开头, 注意source_name是指针
+	p = source_name;  //p用于遍历整个名字
+	name_len = 0;
+
+	//开始遍历, 老师说, 低一级的路径, 不在这个while里面比较, 所以遇到分隔符就跳出
+	//总之: 这个while就是将/xxx/中间的目录名xxx, 或者/xxx.txt的文件名取出来, 都是不包括/的
+	while ((*p != '\0') && !is_path_sep(*p))
+	{
+		if (*p == '.') {
+			ext_dot = p;// 让扩展名分隔符指向p
+		}
+		p++;
+		name_len++; //长度的计数++
+	}
+
+	ext_existed = (ext_dot > source_name) && (ext_dot < (source_name + name_len - 1)); //如果这个点, 大于文件名的开头, 小于文件名的结束
+
+	//遍历source_name, 并且查找
+	for (p = source_name; p < source_name + name_len; p++) {
+		if (ext_existed) { //如果扩展名存在
+			if (p < ext_dot) {
+				case_cfg |= islower(*p) ? DIRITEM_NTRES_BODY_LOWER : 0;//保存文件名的大小写配置
+			}
+			else if (p > ext_dot) {
+				case_cfg |= islower(*p) ? DIRITEM_NTRES_EXT_LOWER : 0;//保存扩展名的大小写配置
+			}
+		}
+		else { //不存在
+			   //保存文件名的大小写配置
+			case_cfg |= islower(*p) ? DIRITEM_NTRES_BODY_LOWER : 0; //遍历全部的p,如果有一个p是小写,也就是文件名有一个字符是小写, 就把全部变成小写
+		}
+	}
+
+	return case_cfg;
+}
 //4.10	修改文件名
-xfat_err_t xfile_rename(xfat_t* xfat, const char* path, const char* new_name) {
-	//找到目录项
+xfat_err_t xfile_rename(xfat_t* xfat, const char* path, const char* new_name) { //我们要找的路径(文件)是绝对路径,从根目录开始
+	//找到匹配type的目录项, 但是还不保证路径是我们想要的
+	diritem_t* diritem = (diritem_t*)0;
+	u32_t curr_cluster, curr_offset; //当前查找的位置
+	u32_t next_cluster, next_offset; //下一轮查找的位置
+	u32_t found_cluster, found_offset; //找到时的位置
+	diritem_t** diritem; //找到的目录项
+	const char* curr_path; //当前查找的路径. 我有点奇怪就是为什么是const, 之后不都更新了吗
+
+	curr_cluster = xfat->root_cluster; //因为我们默认path是绝对路径, 所以从根目录的簇号开始 (todo: 如果以后支持相对路径, 就需更改这一条了)
+	curr_offset = 0;
+
+	//假设给定的路径是 /a/b/c/d, 所以我们的curr_path会将整个路径切分成一个一个: /a, /b, /c
+	for (curr_path = path; curr_path != '\0'; curr_path = get_child_path(curr_path)) //不停遍历子路径, 直到全部遍历完. 应该不会提前break
+	{
+		do {
+			//在curr_path中查找符合type的目录项. type是: 已经存在的目录项(因为我们的目的是重命名,所以需要已存在的)
+			xfat_err_t err = get_next_diritem(xfat, DIRITEM_GET_USED, curr_cluster, curr_offset, &found_cluster, &found_offset, &next_cluster, &next_offset, &diritem);
+			if (err < 0) return err;//注意, 上面之所以要提供found_和next_类型是因为: found_仅仅代表找到了符合type的,但是如果不符合我们的路径要的文件, 我们需要通过next_继续寻找下一个目录项diritem
+			
+			//即便走到这里, 也有可能存在dirtiem是空的情况, 见get_next_diritem()的末尾两句
+			if (diritem == (diritem_t*)0) {
+				return FS_ERR_NONE; //说明不存在要找的文件
+			}
+
+			if (is_filename_match((char*)diritem->DIR_Name, curr_path)) { //也就相当于dir_name和我们的/a, 或者/b, /c去比较, 并且发现匹配了
+				if (get_file_type(diritem) == FAT_DIR) { //如果发现这是个目录, 说明为了找到我们的目标文件, 我们需要继续找子目录. 如果这刚好是文件, bingo找到了
+					curr_cluster = get_diritem_cluster(diritem); //为什么不用上面的 &next_cluster, &next_offset? 因为next_cluster是用于diritem不符合path才去下一个位置找目录项用的. 但是这里, diritem就是我们需要的, 所以我们curr_需要等于diritem的get_diritem_cluster(), 这个函数的意思是: 得到diritem所对应的文件/目录所在的簇号. 见定义: 获取文件的簇号, 高16位和低16位组合
+					curr_offset = 0; //我们从该文件/目录的簇的开头开始找
+				}
+
+				break; 
+				//跳出while: 
+				//1. 如果之前是fat_dir, 并且我们curr_path还有子目录/文件名, 那就继续 (一般来说, curr_path都是还有子目录/或者文件名的,如果没有的话,属于用户参数给错)
+				//2. 如果之前是文件,bingo
+			}
+			
+			//说明这个符合type的目录项,不是我们想要的,那就去看下一个符合type的目录项.
+			curr_cluster = next_cluster;
+			curr_offset = next_offset;
+
+		} while (1);
+	}
+
+	//这里没有检查: 文件名在新的目录项中是否存在(老师省略)
+
+	if (diritem && !curr_path) { //说明diritem != (diritem_t*)0, 并且curr_path已经走到了最后, 说明我们找到的diritem就是我们要的文件
+		//更新目录项的名字(我们说的重命名)
+		u32_t dir_sector = to_phy_sector(xfat, found_cluster, found_offset);//找到diritem在整个disk中的绝对扇区号. 这里之所以用found_cluster是因为, next_被使用的情况是(diritem不符合path), get_diritem_cluster(diritem)被使用的情况是(diritem里面存的是目录, 所以要取去这个目录所在的簇)
+		to_sfn((char*)diritem->DIR_Name, new_name); //重命名: set file name
+
+		//配置文件名,扩展名的大小写
+		diritem->DIR_NTRes &= ~DIRITEM_NTRES_CASE_MASK;//用户清零
+		diritem->DIR_NTRes |= get_sfn_case_cfg(new_name); //设置, 如何设置: 通过new_name的大小写设置
+
+		return xdisk_write_sector(xfat_get_disk(xfat), temp_buffer, dir_sector, 1); //将diritem的数据, 回写到temp_buffer中.
+	}
 	
+	return FS_ERR_OK;
+
 }
 

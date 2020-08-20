@@ -20,8 +20,11 @@
 #define DIRITEM_NAME_END                0x00                // 目录项结束名标记
 
 //4.4
-#define DIRITEM_NTRES_BODY_LOWER        0x08                // 文件名小写: 也就是0100
-#define DIRITEM_NTRES_EXT_LOWER         0x10                // 扩展名小写: 也就是1000
+#define DIRITEM_NTRES_BODY_LOWER        0x08                // 文件名小写: 也就是1000
+#define DIRITEM_NTRES_EXT_LOWER         0x10                // 扩展名小写: 也就是0001 0000
+
+//4.10 掩码
+#define DIRITEM_NTRES_CASE_MASK			(0x18)				//文件名,扩展名的掩码. 0x18是: 0001 1000, 使用:diritem->DIR_NTRes &= ~DIRITEM_NTRES_CASE_MASK;. 所以就可以把上面的DIRITEM_NTRES_BODY_LOWER, DIRITEM_NTRES_EXT_LOWER给清零
 
 //3.3 属性
 #define DIRITEM_ATTR_READ_ONLY          0x01                // 目录项属性：只读
@@ -34,6 +37,15 @@
 
 //4.2 8+3格式的文件名, 例如12345678txt
 #define SFN_LEN							11					//短文件名, 11字节
+
+//4.10 想要的目录项类型
+#define DIRITEM_GET_FREE				(1 << 0)
+#define DIRITEM_GET_USED				(1 << 1)
+#define DIRITEM_GET_END					(1 << 2)
+#define DIRITEM_GET_ALL					(0xFF)
+
+
+
 
 //3.1 定义FAT分区里面的第0块内容, 也就是保留区
 #pragma pack(1) //因为我们要保证和disk里面的内容一一对应, 不留空隙, 所以记得用pragma pack(1)

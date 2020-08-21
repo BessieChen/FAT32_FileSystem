@@ -1,10 +1,2 @@
-﻿  xfat.c
-c:\users\86188\documents\jobs\1004_os\fat\fat32_filesystem\04_10\fat32_test\fat32_test\xfat.c(26): warning C4013: “cluster_first_sector”未定义；假设外部返回 int
-c:\users\86188\documents\jobs\1004_os\fat\fat32_filesystem\04_10\fat32_test\fat32_test\xfat.c(149): warning C4142: "cluster_first_sector": 类型的良性重定义
-  fat32_test.c
-  driver.c
-  正在生成代码...
-c:\users\86188\documents\jobs\1004_os\fat\fat32_filesystem\04_10\fat32_test\fat32_test\xfat.c(1063): warning C4715: “get_next_diritem”: 不是所有的控件路径都返回值
-c:\users\86188\documents\jobs\1004_os\fat\fat32_filesystem\04_10\fat32_test\fat32_test\xfat.c(1069): warning C4716: “xfile_rename”: 必须返回一个值
-  fat32_test.vcxproj -> C:\Users\86188\Documents\JOBs\1004_OS\FAT\FAT32_FileSystem\04_10\fat32_test\Debug\fat32_test.exe
+﻿  fat32_test.vcxproj -> C:\Users\86188\Documents\JOBs\1004_OS\FAT\FAT32_FileSystem\04_10\fat32_test\Debug\fat32_test.exe
   fat32_test.vcxproj -> C:\Users\86188\Documents\JOBs\1004_OS\FAT\FAT32_FileSystem\04_10\fat32_test\Debug\fat32_test.pdb (Full PDB)

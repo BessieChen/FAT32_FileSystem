@@ -650,12 +650,13 @@ int fs_seek_test(void) {
 xfat_err_t fs_modify_file_test(void) {
 	xfat_err_t err;
 	xfile_t file;
-	const char* dir_path = "/modify/a0/a1/a2/";
-	const char* file_name1[] = "ABC.efg";
-	const char* file_name2[] = "efg.ABC";
+	const char* dir_path = "/modify/a0/a1/a2/"; //要修改的文件所在的路径
+	const char file_name1[] = "ABC.efg";	//我们的测试:是来回的重命名. 注意:不能写成const char* xxx[] = "xxxx";
+	const char file_name2[] = "efg.ABC";
 	char curr_path[64];
+	const char* new_name;
 
-	printf("modify file attr test..\n");
+	printf("modify file attr test..\n"); //文件属性的修改
 	printf("\n Before rename:\n");
 
 	err = xfile_open(&xfat, &file, dir_path); //打开目录
@@ -664,16 +665,49 @@ xfat_err_t fs_modify_file_test(void) {
 		return err;
 	}
 
-	err = list_sub_file(&file, 0);
+	err = list_sub_file(&file, 0);//将目录下的所有子文件和子目录都列出来(树形)
 	if(err < 0)
 	{
 		return err;
 	}
 
+	xfile_close(&file); //关闭目录
+
+	//开始文件名修改
+	sprintf(curr_path, "%s%s", dir_path, file_name1); //主要功能是把格式化的数据写入某个字符串中。所以也就是把dir_path和file_name1写入curr_path中. 相当于给了路径 + 文件名
+	err = xfile_open(&xfat, &file, curr_path);//如果打开文件名失败,说明文件名是file_name2
+	if (err < 0) {
+		sprintf(curr_path, "%s%s", dir_path, file_name2); //说明要打开的是file_name2
+		new_name = file_name1;
+	}
+	else { //打开成功
+		sprintf(curr_path, "%s%s", dir_path, file_name1);
+		new_name = file_name2;
+	}
+
+	//重命名
+	err = xfile_rename(&xfat, curr_path, new_name);
+	if (err < 0) {
+		printf("rename failed: %s -- to -- %s\n", curr_path, new_name);
+		return err;
+	}
+
 	xfile_close(&file);
 
-	sprintf(curr_path, "%s%s", dir_path, file_name1);
-	err = xfile_open(&xfat, &file, curr_path);
+	//老师再次打印文件下所有文件
+	err = xfile_open(&xfat, &file, dir_path); //打开目录
+	if (err < 0) {
+		printf("open dir failed.\n");
+		return err;
+	}
+	err = list_sub_file(&file, 0);//将目录下的所有子文件和子目录都列出来(树形)
+	if (err < 0)
+	{
+		return err;
+	}
+	xfile_close(&file); //关闭目录
+
+	return FS_ERR_OK;
 }
 
 int main(void)
@@ -723,8 +757,8 @@ int main(void)
 	//if (err < 0) printf("read test failed.\n");
 
 	//4.9 测试: 定位
-	err = fs_seek_test();
-	if (err) return err;
+	//err = fs_seek_test();
+	//if (err) return err;
 
 	//4.10 测试: 文件修改, 重命名
 	err = fs_modify_file_test();

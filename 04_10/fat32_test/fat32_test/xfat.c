@@ -1043,7 +1043,7 @@ xfat_err_t get_next_diritem(xfat_t* xfat, u8_t type, u32_t start_cluster, u32_t 
 			err = xdisk_read_sector(xfat_get_disk(xfat), temp_buffer, curr_sector, 1); //将这个扇区的内容读到temp_buffer
 			if (err < 0) 
 				return err;
-		}
+		} 
 
 		//因为temp_buffer代表一整个扇区, 我们之前得到了扇区内偏移是sector_offset, 所以现在r_diritem指向了我们需要的目录项
 		r_diritem = (diritem_t*)(temp_buffer + sector_offset);

@@ -1031,7 +1031,7 @@ xfat_err_t get_next_diritem(xfat_t* xfat, u8_t type, u32_t start_cluster, u32_t 
 		err = move_cluster_pos(xfat, start_cluster, start_offset, sizeof(diritem_t), next_cluster, next_offset);
 		if (err < 0) 
 			return err;
-
+		 
 		//因为我们读取的函数是只能用来读取一个扇区的. 但是start_offset是簇内偏移, 而不是扇区内的偏移. 所以我们要调节成扇区内的偏移
 		sector_offset = to_sector_offset(xfat_get_disk(xfat), start_offset);
 

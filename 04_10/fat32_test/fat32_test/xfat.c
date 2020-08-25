@@ -3,6 +3,7 @@
 #include "stdlib.h" //因为有malloc()
 #include <string.h> //memcmp()
 #include <ctype.h> //toupper()
+#include<stdio.h>
 
 //3.2 使用全局变量u8_t temp_buffer[512], 因为这里的temp_buffer在xdisk.c中, 所以我们要跨文件使用的话, 要么用#include "xdisk.h", 要么用extern, 否则链接器会报错,因为看到了两个全局变量都叫做temp_buffer
 extern u8_t temp_buffer[512];
@@ -230,7 +231,9 @@ static const char* get_child_path(const char* dir_path) {
 	}
 
 	//退出while的时候, c要么是指向了\0, 要么是指向了一个分隔符
-	return (*c != '\0') ? c + 1 : (const char*)0; //如果是指向分隔符, 那就指向下一位(这个下一位一定是一个非分隔符, 因为分隔符只占1位), 如果是结束符, 那就返回空
+	//return (*c != '\0') ? c + 1 : (const char*)0; //如果是指向分隔符, 那就指向下一位(这个下一位一定是一个非分隔符, 因为分隔符只占1位), 如果是结束符, 那就返回空
+	return (*c == '\0') ? (const char*)0 : c + 1; //如果是指向分隔符, 那就指向下一位(这个下一位一定是一个非分隔符, 因为分隔符只占1位), 如果是结束符, 那就返回空
+
 }
 
 //4.2 获取文件属性
@@ -328,8 +331,8 @@ static u8_t is_filename_match(const char* name_in_dir, const char* target_name) 
 	char temp_name[SFN_LEN]; //长度为8的字符数组
 
 	//4.3 tiny test case
-	char* path = "open.txt";
-	to_sfn(temp_name, path, 0);
+	//char* path = "open.txt";
+	//to_sfn(temp_name, path, 0);
 
 	to_sfn(temp_name, target_name, 0); //将我们的文件名123TXT转换成8+3文件名. 其中0是大小写的配置(0代表配置: 文件名, 扩展名都为大写) //这里比较的是, 转换后的名字: temp_Name, 和我们想要的名字 target_name比较
 
@@ -463,7 +466,7 @@ static xfat_err_t locate_file_dir_item(xfat_t* xfat, u32_t locate_type, u32_t* d
 	//遍历完了所有的簇, 但是还是没有找到
 	return FS_ERR_EOF;
 }
-//4.2 修改 //4.1 打开函数
+//4.10 修复bug 4.2 修改 //4.1 打开函数
 static xfat_err_t open_sub_file(xfat_t* xfat, u32_t dir_cluster, xfile_t* file, const char* path)//找一个文件, 这个文件的父目录的簇号是dir_cluster(也就是说, 去这个dir_cluster簇中, 这个簇里面有很多目录项, 其中一个目录项代表了这个file, 我们通过判断path和哪个目录项的路径一致, 来判断这个file属于哪个目录项, 从而找到这个file的簇号)
 {
 	u32_t parent_cluster = dir_cluster;
@@ -485,6 +488,8 @@ static xfat_err_t open_sub_file(xfat_t* xfat, u32_t dir_cluster, xfile_t* file, 
 		{
 			//移动的字节数
 			u32_t moved_bytes = 0;
+
+			dir_item = (diritem_t*)0; //4.10 可疑的未加入的代码
 
 			//4.5 设置成: 只要dot文件和普通文件.为什么? 因为我们需要找的目录可能是/read/./a/../b/c, 如果不要dot的话, 你会发现执行到/read就执行不下去了.  //找到文件所在. 如果是根目录下的文件, 就要从根目录的簇链(parent_cluster)开始找
 			xfat_err_t err = locate_file_dir_item(xfat, XFILE_LOCATE_DOT | XFILE_LOCATE_NORMAL, &parent_cluster, &parent_cluster_offset, curr_path, &moved_bytes, &dir_item);
@@ -536,8 +541,8 @@ static xfat_err_t open_sub_file(xfat_t* xfat, u32_t dir_cluster, xfile_t* file, 
 	else { //说明要找的是根目录: '/'
 		file->size = 0;
 		file->type = FAT_DIR;
-		file->start_cluster = dir_cluster;
-		file->curr_cluster = dir_cluster;
+		file->start_cluster = parent_cluster;//4.10 可疑的bug; dir_cluster;
+		file->curr_cluster = parent_cluster;//4.10 可疑的bug; dir_cluster;
 	}
 
 	//这一块是共同的
@@ -1004,8 +1009,11 @@ xfat_err_t xfile_seek(xfile_t* file, xfile_ssize_t offset, xfile_origin_t origin
 //4.10 当前的簇号curr_cluster,还有簇内偏移curr_offset知道了之后. 移动move_btyes个字节之后, 我们要求出最终的簇号和簇内偏移
 xfat_err_t move_cluster_pos(xfat_t* xfat, u32_t curr_cluster, u32_t curr_offset, u32_t move_bytes, u32_t* next_cluster, u32_t* next_offset) {
 	if ((curr_offset + move_bytes) >= xfat->cluster_byte_size) { //bug!4.10的bug, 我竟然写成了curr_cluster + curr_offset, 应该是cur_offset + move_bytes. 移动完之后, 超出一个簇. (注意这里==也算超出, 说明curr_cluster指向的是第一个未读取的元素)
-		xfat_err_t err = get_next_cluster(xfat, curr_cluster, next_cluster);
-		if (err < 0) return err;
+		xfat_err_t err = get_next_cluster(xfat, curr_cluster, next_cluster); 
+		if (err < 0)
+		{
+			return err; 
+		}
 
 		*next_offset = 0; //老师说, 在4.10为止, 我们这个函数只是服务于一个一个目录项的移动,所以如果 >= 超出簇, 肯定是offset = 0, 也就是簇的开头
 	}
@@ -1083,7 +1091,7 @@ xfat_err_t get_next_diritem(xfat_t* xfat, u8_t type, u32_t start_cluster, u32_t 
 	}
 
 	//说明没有找到
-	*diritem = (diritem_t*)0;
+	*diritem = (diritem_t*)0;  //4.10 debug, 的确会走这一句(但是不应该走这一句)
 	return FS_ERR_EOF; //说明已经遍历到了结尾
 }
 
@@ -1158,14 +1166,15 @@ xfat_err_t xfile_rename(xfat_t* xfat, const char* path, const char* new_name) { 
 	//假设给定的路径是 /a/b/c/d, 所以我们的curr_path会将整个路径切分成一个一个: /a, /b, /c
 	for (curr_path = path; curr_path != '\0'; curr_path = get_child_path(curr_path)) //不停遍历子路径, 直到全部遍历完. 应该不会提前break
 	{
+		printf("4.10 debug: %s\n", curr_path);
 		do {
 			//在curr_path中查找符合type的目录项. type是: 已经存在的目录项(因为我们的目的是重命名,所以需要已存在的)
 			xfat_err_t err = get_next_diritem(xfat, DIRITEM_GET_USED, curr_cluster, curr_offset, &found_cluster, &found_offset, &next_cluster, &next_offset, temp_buffer, &diritem);
-			if (err < 0) return err;//注意, 上面之所以要提供found_和next_类型是因为: found_仅仅代表找到了符合type的,但是如果不符合我们的路径要的文件, 我们需要通过next_继续寻找下一个目录项diritem
+			if (err < 0) return err;//注意, 上面之所以要提供found_和next_类型是因为: found_仅仅代表找到了符合type的,但是如果不符合我们的路径要的文件, 我们需要通过next_继续寻找下一个目录项diritem  //4.10 debug, 的确会走这一句(但是不应该走这一句)
 			
 			//即便走到这里, 也有可能存在dirtiem是空的情况, 见get_next_diritem()的末尾两句
 			if (diritem == (diritem_t*)0) {
-				return FS_ERR_NONE; //说明不存在要找的文件
+				return FS_ERR_NONE; //说明不存在要找的文件 //4.10 debug, 的确会走这一句(但是不应该走这一句)
 			}
 
 			if (is_filename_match((char*)diritem->DIR_Name, curr_path)) { //也就相当于dir_name和我们的/a, 或者/b, /c去比较, 并且发现匹配了
@@ -1198,10 +1207,10 @@ xfat_err_t xfile_rename(xfat_t* xfat, const char* path, const char* new_name) { 
 		diritem->DIR_NTRes &= ~DIRITEM_NTRES_CASE_MASK;//用户清零
 		diritem->DIR_NTRes |= get_sfn_case_cfg(new_name); //设置, 如何设置: 通过new_name的大小写设置
 
-		return xdisk_write_sector(xfat_get_disk(xfat), temp_buffer, dir_sector, 1); //将diritem的数据, 回写到temp_buffer中.
+		return xdisk_write_sector(xfat_get_disk(xfat), temp_buffer, dir_sector, 1); //将diritem的数据, 回写到temp_buffer中. //4.10 debug, 不会走这一句
 	}
 	
-	return FS_ERR_OK;
+	return FS_ERR_OK; //4.10 debug, 不会走这一句
 
 }
 

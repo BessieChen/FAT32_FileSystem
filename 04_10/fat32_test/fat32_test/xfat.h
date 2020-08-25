@@ -40,8 +40,8 @@
 
 //4.10 想要的目录项类型
 #define DIRITEM_GET_FREE				(1 << 0)
-#define DIRITEM_GET_USED				(1 << 1)
-#define DIRITEM_GET_END					(1 << 2)
+#define DIRITEM_GET_USED				(1 << 2)
+#define DIRITEM_GET_END					(1 << 3) //4.10 什么鬼?video中可不是 1<<3
 #define DIRITEM_GET_ALL					(0xFF)
 
 

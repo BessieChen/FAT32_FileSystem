@@ -676,7 +676,7 @@ xfat_err_t fs_modify_file_test(void) {
 	//开始文件名修改
 	sprintf(curr_path, "%s%s", dir_path, file_name1); //主要功能是把格式化的数据写入某个字符串中。所以也就是把dir_path和file_name1写入curr_path中. 相当于给了路径 + 文件名
 	err = xfile_open(&xfat, &file, curr_path);//如果打开文件名失败,说明文件名是file_name2
-	if (err < 0) {
+	if (err < 0) { //4.10 code goes into this branch, meaning our file_name in disk is file_name2: /modify/a0/a1/a2/efg.ABC
 		sprintf(curr_path, "%s%s", dir_path, file_name2); //说明要打开的是file_name2
 		new_name = file_name1;
 	}
@@ -760,7 +760,7 @@ int main(void)
 	//err = fs_seek_test();
 	//if (err) return err;
 
-	//4.10 测试: 文件修改, 重命名
+	//4.10 测试: 文件修改, 重命名 
 	err = fs_modify_file_test();
 	if (err) return err;
 

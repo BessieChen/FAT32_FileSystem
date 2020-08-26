@@ -18,6 +18,8 @@ xdisk_part_t  disk_part;
 static u32_t read_buffer[160 * 1024]; //可以存160*1024个字节的东西, 相当于160MB
 //3.2 定义xfat, 这里存储了fat表的关键信息
 xfat_t xfat;
+//4.10 定义全局的write_buffer, 将write_buffer的内容写入disk
+static u32_t write_buffer[160 * 1024];
 
 //2.4 修改: 获取每个分区的信息 //2.2 定义检测的函数
 int disk_part_test(void) {
@@ -755,10 +757,126 @@ xfat_err_t fs_modify_file_test(void) {
 	return FS_ERR_OK;
 }
 
+//4.12 写入
+int file_write_test(const char* path, u32_t ele_size, u32_t ele_count, u32_t write_count) { //写ele_count个元素,每个元素大小事ele_size字节, 写write_count次
+	xfat_err_t err;
+	xfile_t file;
+	u32_t i;
+	u32_t j;
+
+	err = xfile_open(&xfat, &file, path);
+	if (err < 0) {
+		printf("open failed.\n");
+		return err;
+	}
+
+	for (i = 0; i < write_count; i++) {
+		u32_t end;
+
+		//开始写
+		err = xfile_write(write_buffer, ele_size, ele_count, &file); //将write_buffer里面的内容写入file,注意write_buffer已经在main()的刚开始初始化了
+		if (err < 0) {
+			printf("write failed.\n");
+			return err;
+		}
+
+		//定位到文件写入之前的位置, 注意是负数
+		err = xfile_seek(&file, -(xfile_ssize_t)(ele_size * ele_count), XFAT_SEEK_CUR);
+		if (err < 0) {
+			printf("seek failed.\n");
+			return err;
+		}
+
+		//将写入的内容读取出来
+		memset(read_buffer, 0, sizeof(read_buffer)); //先清空
+		err = xfile_read(read_buffer, ele_size, ele_count, &file);
+		if (err < 0) {
+			printf("read failed.\n");
+			return err;
+		}
+
+		//比较, 不用memcmp(), 而是一个个比较,方便定位问题
+		end = ele_size * ele_count / sizeof(u32_t); //说明是4字节4字节的读取
+		for (j = 0; j < end; j++) {
+			if (read_buffer[j] != j) {
+				printf("content different.\n");
+				return -1;
+			}
+		}
+	}
+
+	xfile_close(&file);
+	return 0;
+}
+//4.12 写的测试
+int fs_write_test()
+{
+	const char* dir_path = "/write/";
+	char file_path[64]; //文件的缓冲区
+	xfat_err_t err;
+
+	printf("write file test!\n");
+
+	sprintf(file_path, "%s%s", dir_path, "1MB.bin");//要写入的文件路径: /write/1MB.bin
+
+	//第一次写入
+	err = file_write_test(file_path, 32, 64, 5);//写64个元素,每个元素32字节,连续写5次
+	if (err < 0) {
+		printf("write file failed.\n");
+		return err;
+	}
+
+	//第二次: 扇区大小的写入
+	err = file_write_test(file_path, disk.sector_size, 12, 5);//写64个元素,每个元素32字节,连续写5次
+	if (err < 0) {
+		printf("write file failed.\n");
+		return err;
+	}
+
+	//超过扇区
+	err = file_write_test(file_path, disk.sector_size+32, 12, 5);//写64个元素,每个元素32字节,连续写5次
+	if (err < 0) {
+		printf("write file failed.\n");
+		return err;
+	}
+
+	//一个簇
+	err = file_write_test(file_path, xfat.cluster_byte_size, 12, 5);//写64个元素,每个元素32字节,连续写5次
+	if (err < 0) {
+		printf("write file failed.\n");
+		return err;
+	}
+
+	//跨簇
+	err = file_write_test(file_path, xfat.cluster_byte_size + 32, 12, 5);//写64个元素,每个元素32字节,连续写5次
+	if (err < 0) {
+		printf("write file failed.\n");
+		return err;
+	}
+
+	//多个簇
+	err = file_write_test(file_path, xfat.cluster_byte_size * 2 + 32, 12, 5);//写64个元素,每个元素32字节,连续写5次
+	if (err < 0) {
+		printf("write file failed.\n");
+		return err;
+	}
+
+	//结束
+	printf("write file test end.\n");
+	return FS_ERR_OK;
+}
+
+
 int main(void)
 {
 	xfat_err_t err;
 	
+	//4.10 要写入disk的内容, 先保存到write_buffer
+	u32_t i;
+	for (i = 0; i < sizeof(write_buffer) / sizeof(u32_t); i++) {
+		write_buffer[i] = i;
+	}
+
 	//2.2 打开disk文件
 	err = xdisk_open(&disk, "vdisk", &vdisk_driver, (void*)disk_path);
 	if (err) {
@@ -797,17 +915,23 @@ int main(void)
 	//err = dir_trans_test();
 	//if (err < 0) return err;
 
-	//4.8 测试: 读取文件
-	//err = fs_read_test();
-	//if (err < 0) printf("read test failed.\n");
+	//4.12 测试: 读取文件
+	err = fs_read_test();
+	if (err < 0) printf("read test failed.\n");
 
 	//4.9 测试: 定位
 	//err = fs_seek_test();
 	//if (err) return err;
 
 	//4.10 测试: 文件修改, 重命名 
-	err = fs_modify_file_test();
-	if (err) return err;
+	//err = fs_modify_file_test();
+	//if (err) return err;
+
+	//4.12 测试: 写入到文件
+	err = fs_write_test();
+	if (err < 0) {
+		return err;
+	}
 
 	//2.2 关闭
 	err = xdisk_close(&disk);

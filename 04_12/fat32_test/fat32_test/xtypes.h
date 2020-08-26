@@ -16,6 +16,7 @@ typedef enum _xfat_err_t {
 	FS_ERR_PARAM = -2, //参数错误, 例如传入的读取范围过大
 	FS_ERR_NONE = -3, //分区没有找到
 	FS_ERR_FSTYPE = -4, //文件类型错误
+	FS_ERR_READONLY = -5, //只读
 }xfat_err_t; //记得要写上xfat_err_t, 否则报错说: 需要设置声明
 
 //4.8 文件大小

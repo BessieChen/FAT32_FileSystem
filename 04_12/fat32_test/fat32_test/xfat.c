@@ -537,12 +537,15 @@ static xfat_err_t open_sub_file(xfat_t* xfat, u32_t dir_cluster, xfile_t* file, 
 		file->type = get_file_type(dir_item); //虽然dir_item里面有Attr属性, 但是是通过8个bit来表示的, 所以这里用函数获取
 		file->start_cluster = file_start_cluster;
 		file->curr_cluster = file_start_cluster;
+		//4.12 看是否是只读,如果是的话,将这个信息保存到file.attr中
+		file->attr = (dir_item->DIR_Attr & DIRITEM_ATTR_READ_ONLY) ? XFILE_ATTR_READONLY : 0;
 	}
 	else { //说明要找的是根目录: '/'
 		file->size = 0;
 		file->type = FAT_DIR;
 		file->start_cluster = parent_cluster;//4.10 可疑的bug; dir_cluster;
 		file->curr_cluster = parent_cluster;//4.10 可疑的bug; dir_cluster;
+		file->attr = 0; //4.12 缺省的值
 	}
 
 	//这一块是共同的
@@ -771,6 +774,31 @@ void xfile_clear_err(xfile_t* file)
 	file->err = FS_ERR_OK;
 }
 
+//4.12 调整file中的pos位置
+static xfat_err_t move_file_pos(xfile_t* file, u32_t move_bytes) {
+	u32_t to_move = move_bytes;
+	u32_t cluster_offset; //簇中偏移
+
+	if (file->pos + move_bytes >= file->size) { //说明超出了一个文件的大小
+		to_move = file->size - file->pos; //我们先move一部分
+	}
+
+	cluster_offset = to_cluster_offset(file->xfat, file->pos);
+
+	if (cluster_offset + to_move >= file->xfat->cluster_byte_size) {
+		xfat_err_t err = get_next_cluster(file->xfat, cluster_offset, &cluster_offset); //移动到下一个簇
+		if (err != FS_ERR_OK) {
+			file->err = err;
+			return err;
+		}
+	}
+
+	file->pos += to_move;
+	return FS_ERR_OK;
+
+
+}
+
 //4.8 
 xfile_size_t xfile_read(void* buffer, xfile_size_t ele_size, xfile_size_t count, xfile_t* file)//读取元素的大小(ele_size), 读取多少个这样的元素(count)
 {
@@ -797,19 +825,22 @@ xfile_size_t xfile_read(void* buffer, xfile_size_t ele_size, xfile_size_t count,
 	//已知条件: pos只是当前位置的字节, start_cluster是开始的簇号.
 	//我们需要知道pos现在是第几个簇的第几个扇区的第几个偏移
 	xdisk_t* disk = file_get_disk(file); //从file获得disk
-	u32_t sector_in_cluster, sector_offset;
-	
-	//pos对应的是簇里面的哪一个扇区
-	sector_in_cluster = to_sector(disk, to_cluster_offset(file->xfat, file->pos)); //pos是全部的字节, 在某一个簇里面的偏移:to_cluster_offset(file->xfat, file->pos), 这个簇里面的偏移,对应的是簇里面的哪一个扇区: to_sector(disk, xxx); //所以sector_in_cluster的值是0,1,2,3
-	//pos对应的是扇区里面的哪一个字节的偏移
-	sector_offset = to_sector_offset(disk, file->pos); //所以sector_offset的取值是0-511
 
 	//是否还有要读的,并且, 判断当前簇是否是有效的
 	while ((bytes_to_read > 0)  &&  is_cluster_valid(file->curr_cluster)) {
 		xfat_err_t err;
 		xfile_size_t curr_read_bytes = 0; //这里其实是u32_t. 所以能够代表2^32 = 4g个字节 = 4GB
 		u32_t sector_count = 0;
+
+		//4.12 所以每次需要重新计算
+		u32_t sector_in_cluster, sector_offset;
+		//pos对应的是簇里面的哪一个扇区
+		sector_in_cluster = to_sector(disk, to_cluster_offset(file->xfat, file->pos)); //pos是全部的字节, 在某一个簇里面的偏移:to_cluster_offset(file->xfat, file->pos), 这个簇里面的偏移,对应的是簇里面的哪一个扇区: to_sector(disk, xxx); //所以sector_in_cluster的值是0,1,2,3
+		//pos对应的是扇区里面的哪一个字节的偏移
+		sector_offset = to_sector_offset(disk, file->pos); //所以sector_offset的取值是0-511
+
 		u32_t start_sector = cluster_first_sector(file->xfat, file->curr_cluster) + sector_in_cluster; //求出当前读取的位置(绝对扇区号) = 当前簇的第一个扇区号(也是绝对扇区号) + 当前读取的位置的相对于簇起始位置的扇区号
+
 
 		//为了方便起见:约定几种情况
 		/*
@@ -883,35 +914,45 @@ xfile_size_t xfile_read(void* buffer, xfile_size_t ele_size, xfile_size_t count,
 		}
 
 		r_count_readed += curr_read_bytes; //更新实际读取的字节数
-		sector_offset += curr_read_bytes; //之前我们的offset是没有读取的时候的在扇区的偏移 (sector_offset指向的是第一个未读取的字节), 现在先加上我们已经读取的字节数
+		
+		//删除, 可以由下一句代替
+		/*
+		//sector_offset += curr_read_bytes; //之前我们的offset是没有读取的时候的在扇区的偏移 (sector_offset指向的是第一个未读取的字节), 现在先加上我们已经读取的字节数
 
-		//读取完之后, 我们要判断, 下一个读取的簇号是什么(是不需要更改, 还是需要更改). 下一个读取的扇区是什么(是否需要从0,1,2,3中从新归为成0), 下一个要读取的扇区的offset是什么(注意, 这里offset只有2种情况: 1.offset没有超过一个扇区大小,即还是当前扇区的中间字节, 2.offset变成了下一个扇区的第一个字节). 不存在那种: offset成为下一个扇区的中间字节)
-		if (sector_offset >= disk->sector_size) { //如果字节数超出了扇区 (注意: 细节问题, 这里的sector_offset指向的是第一个未读取的字节, 假设我们一个扇区有3个字节, 索引分别是0,1,2, 在读取之前sector_offset = 1, 说明第2个字节没有被读取, 假设curr_read_bytes = 2, 说明读取了两个字节, 也就是index==1,2都读取了. 此时sector_offset += curr_read_bytes = 3, 也就是指向了下一个扇区的第一个字节, 也就是指向了第一个没有读取的字节.
-			
-			//另外, 如果走到这里, 说明我们是经历了上面的: 2,4,5,6. 也就是这里sector_offset要么<sector_size, 要么sector_offset == sector_size, 这里的if( >= )应该只是保守写法
-			sector_offset = 0; //既然是新的扇区的第一个字节, 所以要重新归为0
-			sector_in_cluster += sector_count;	//我们也要看下现在到了一个簇中的第几个扇区, sector_in_cluster的取值是0,1,2,3
+		////读取完之后, 我们要判断, 下一个读取的簇号是什么(是不需要更改, 还是需要更改). 下一个读取的扇区是什么(是否需要从0,1,2,3中从新归为成0), 下一个要读取的扇区的offset是什么(注意, 这里offset只有2种情况: 1.offset没有超过一个扇区大小,即还是当前扇区的中间字节, 2.offset变成了下一个扇区的第一个字节). 不存在那种: offset成为下一个扇区的中间字节)
+		//if (sector_offset >= disk->sector_size) { //如果字节数超出了扇区 (注意: 细节问题, 这里的sector_offset指向的是第一个未读取的字节, 假设我们一个扇区有3个字节, 索引分别是0,1,2, 在读取之前sector_offset = 1, 说明第2个字节没有被读取, 假设curr_read_bytes = 2, 说明读取了两个字节, 也就是index==1,2都读取了. 此时sector_offset += curr_read_bytes = 3, 也就是指向了下一个扇区的第一个字节, 也就是指向了第一个没有读取的字节.
+		//	
+		//	//另外, 如果走到这里, 说明我们是经历了上面的: 2,4,5,6. 也就是这里sector_offset要么<sector_size, 要么sector_offset == sector_size, 这里的if( >= )应该只是保守写法
+		//	sector_offset = 0; //既然是新的扇区的第一个字节, 所以要重新归为0
+		//	sector_in_cluster += sector_count;	//我们也要看下现在到了一个簇中的第几个扇区, sector_in_cluster的取值是0,1,2,3
 
-			if (sector_in_cluster >= file->xfat->sec_per_cluster) { //判断如果这个扇区已经越界了(例如 sector_in_cluster的取值变成了4. 注意, 这里不可能是5,6,7.., 因为sector_count的最大值只可能是4, 并且在line355读取扇区的时候, 我们是保证读取的多个扇区都是在同一个簇里面的), 也就是说应该读下一个簇了
-				
-				sector_in_cluster = 0; //既然是新簇的第一个扇区, 我们就归为0
-				err = get_next_cluster(file->xfat, file->curr_cluster, &file->curr_cluster); //知道簇链中的下一个簇的簇号是多少
-				if (err != FS_ERR_OK) {
-					file->err = err;
-					return 0;
-				}
-			}
-		}
+		//	if (sector_in_cluster >= file->xfat->sec_per_cluster) { //判断如果这个扇区已经越界了(例如 sector_in_cluster的取值变成了4. 注意, 这里不可能是5,6,7.., 因为sector_count的最大值只可能是4, 并且在line355读取扇区的时候, 我们是保证读取的多个扇区都是在同一个簇里面的), 也就是说应该读下一个簇了
+		//		
+		//		sector_in_cluster = 0; //既然是新簇的第一个扇区, 我们就归为0
+		//		err = get_next_cluster(file->xfat, file->curr_cluster, &file->curr_cluster); //知道簇链中的下一个簇的簇号是多少
+		//		if (err != FS_ERR_OK) {
+		//			file->err = err;
+		//			return 0;
+		//		}
+		//	}
+		//}
 
-		//更新
-		file->pos += curr_read_bytes;
+		////更新
+		//file->pos += curr_read_bytes;
+		*/
+
+		//4.12 调整file内部的pos指针
+		err = move_file_pos(file, curr_read_bytes);
+		if (err) return err;
+		//之后回到while
 
 		//之后回到while
 	}
 
 	//从while出来之后, 我们想知道是因为我们要读的字节太多了, 导致没有这么多可读(也就是最后的簇号无效), 还是我们要读的字节都读完了.
-	file->err = is_cluster_valid(file->curr_cluster) ? FS_ERR_OK : FS_ERR_EOF;
-
+	//4.12 删除file->err = is_cluster_valid(file->curr_cluster) ? FS_ERR_OK : FS_ERR_EOF;
+	
+	file->err = file->pos == file->size; //4.12 表示进入文件的末端
 	return r_count_readed / ele_size; //最终读取的有效字节数/元素的字节数 = 实际读取的元素数量
 }
 
@@ -1314,5 +1355,171 @@ xfat_err_t xfile_set_ctime(xfat_t* xfat, const char* path, xfile_time_t* time) {
 	return err;
 }
 
+//4.12 
+
+//4.12 写
+xfile_size_t xfile_write(void* buffer, xfile_size_t ele_size, xfile_size_t count, xfile_t* file) {
+	xfile_size_t bytes_to_write = count * ele_size; //要写的字节数
+	u8_t* write_buffer = (u8_t*)buffer; //定义一个指针, 指向buffer
+	xfile_size_t r_count_writed = 0; //实际写的字节数, 注意, 可能会小于要读的字节数bytes_to_read
+
+	if (file->type != FAT_FILE) { //不是普通文件的话, 是不允许读的
+		file->err = FS_ERR_FSTYPE; //文件类型错误的错误码
+		return 0;
+	}
+
+	//我们允许扩容的写,所以删除这句
+	//if (file->pos >= file->size) //当前的读写位置, 超过了文件的末端, pos是当前是多少个字节
+	//{
+	//	file->err = FS_ERR_EOF; //说明已经读到结束了
+	//	return 0;
+	//}
+
+	//4.12 判断文件属性是否只读, 也就时不能写
+	if (file->attr & XFILE_ATTR_READONLY) {
+		file->err = FS_ERR_READONLY;
+		return 0;
+	}
+
+	//如果写入==0
+	if (bytes_to_write == 0) {
+		file->err = FS_ERR_OK;
+		return 0;
+	}
+
+	//删去
+	//if (file->pos + bytes_to_write > file->size) { //读取的数量: 超过了文件大小
+	//	bytes_to_write = file->size - file->pos;	//将读取的数量调小. 也就是当前位置pos距离终止位置size之间的差额
+	//}
+
+	//已知条件: pos只是当前位置的字节, start_cluster是开始的簇号.
+	//我们需要知道pos现在是第几个簇的第几个扇区的第几个偏移
+	xdisk_t* disk = file_get_disk(file); //从file获得disk
+	
+													   //是否还有要读的,并且, 判断当前簇是否是有效的
+	while ((bytes_to_write > 0) && is_cluster_valid(file->curr_cluster)) {
+		xfat_err_t err;
+		xfile_size_t curr_write_bytes = 0; //这里其实是u32_t. 所以能够代表2^32 = 4g个字节 = 4GB
+		u32_t sector_count = 0;
+
+		//4.12 需要加入while里面
+		u32_t sector_in_cluster, sector_offset;
+		//pos对应的是簇里面的哪一个扇区
+		sector_in_cluster = to_sector(disk, to_cluster_offset(file->xfat, file->pos)); //pos是全部的字节, 在某一个簇里面的偏移:to_cluster_offset(file->xfat, file->pos), 这个簇里面的偏移,对应的是簇里面的哪一个扇区: to_sector(disk, xxx); //所以sector_in_cluster的值是0,1,2,3
+		//pos对应的是扇区里面的哪一个字节的偏移
+		sector_offset = to_sector_offset(disk, file->pos); //所以sector_offset的取值是0-511
+
+		u32_t start_sector = cluster_first_sector(file->xfat, file->curr_cluster) + sector_in_cluster; //求出当前读取的位置(绝对扇区号) = 当前簇的第一个扇区号(也是绝对扇区号) + 当前读取的位置的相对于簇起始位置的扇区号
+
+		//为了方便起见:约定几种情况
+		/*
+		1. 情况1: 在一个扇区里面, 起点在中间, 终点在中间
+		2. 情况2: 在一个扇区里面, 起点在首位, 终点在中间
+		3. 情况3: 在一个扇区里面, 起点在中间, 终点在末尾
+		4. 情况4: 占了一整个扇区
+		5. 情况5: 占了多个整个扇区,但是扇区是在一个簇里面
+		6. 情况6: 占了多个整个扇区,但是扇区是在多个不连续的簇里面
+
+		总之: 你遇到的情况可能是
+		1
+		2
+		3
+		4
+		2+(4/5/6)+3
+		2+(4/5/6)
+		(4/5/6)+3
+		4/5/6
+		*/
+
+		if ((sector_offset != 0) || (!sector_offset && (bytes_to_write < disk->sector_size))) { //需要对应的是: 1,3 || 2, 2+(4/5/6)+3, 2+(4/5/6)
+			//解释
+			/*
+			1. sector_offset != 0, 说明起点是一个扇区的中间的某个字节
+			2. (!sector_offset && (bytes_to_read < disk->sector_size), 首先!sector_offset相当于sector_offset == 0, 其次, bytes_to_read代表着从sector_offset开始读取bytes_to_read个字节. 然后这里说的是起点是扇区的第一个字节, 但是终点在一个扇区之内
+			3/ 总之这两种情况都是属于: 要么起点不规整, 要么终点不规整
+			4. 区别在于: 起点不规整(可能存在跨扇区), 起点规整终点不规整(保证了不跨扇区)
+			5. 对于起点不规整且跨扇区的条件, 见下面的 if (sector_offset != 0 && (sector_offset + bytes_to_read > disk->sector_size))
+			*/
+			sector_count = 1; //读取一个扇区
+			curr_write_bytes = bytes_to_write; //如果说: 起点规整终点不规整(保证了不跨扇区) + 起点不规整(也不跨扇区), 就curr_read_bytes的含义就是, 我们要读取curr_read_bytes个字节
+
+			if (sector_offset != 0 && (sector_offset + bytes_to_write > disk->sector_size)) { //起点不规整且跨扇区的条件
+				curr_write_bytes = disk->sector_size - sector_offset; //我们去读的就是不规整的起点到该扇区的终点这部分, 跨出扇区的部分瑕疵度
+			}
+
+			err = xdisk_read_sector(disk, temp_buffer, start_sector, 1);//将一整块扇区的512字节都读到temp_buffer全局变量
+			if (err < 0)
+			{
+				file->err = err;
+				return 0;
+			}
+			
+			//将write_buffer中的内容,先写入temp_buffer中,具体写的位置是temp_buffer中的sector_offset
+			memcpy(temp_buffer + sector_offset, write_buffer, curr_write_bytes);
+
+			write_buffer += curr_write_bytes; //注意: read_buffer没有容量大小限制, 这里的加法是指针的加法
+
+			bytes_to_write -= curr_write_bytes; //因为已经读了curr_read_bytes, 所以要减去
+		}
+		else {  //对应的是: 4/5/6, (4/5/6)+3   //这里处理的是起点对齐并且终点跨扇区的情况, 注意: 即便跨扇区,我们也可以分割成: n个一整块扇区 + 不足一个扇区 //总之,这个else处理的就是将一整块扇区给read_buffer, 而不是一整块扇区的一部分给read_buffer
+			sector_count = to_sector(disk, bytes_to_write); //还要读多少个扇区. 注意, 这里已经舍去了不足一个扇区的部分. 因为 to_sector(disk, offset) ((offset) / (disk)->sector_size). 所以不足一个扇区的部分, 会在while的下一轮判断
+
+														   //我们可以一次性读取几个扇区, 但是要1.) 判断是否跨簇, (因为跨簇后, 下一个簇很可能跟现在的簇不是连续的), 2.) 另外可能存在结尾还不足一个扇区的部分
+			if ((sector_in_cluster + sector_count) > file->xfat->sec_per_cluster)//跨簇了: 当前的扇区号(相对于簇起始的扇区) + 要读的扇区数量 大于 一个簇的数量
+			{
+				sector_count = file->xfat->sec_per_cluster - sector_in_cluster; //只读取从sector_in_cluster(取值0,1,2,3)到 file->xfat->sec_per_cluster(值==4)个扇区
+			}
+
+			//开始读取扇区: (因为我们保证读的扇区是在同一个粗里面的)
+			err = xdisk_write_sector(disk, write_buffer, start_sector, sector_count); //这里保证了: 出去的都是一个簇内的所有整个扇区(注意, 毕竟else里面 处理的是起点对齐并且终点跨扇区的情况)
+			if (err != FS_ERR_OK) {
+				file->err = err;
+				return 0;
+			}
+
+			curr_write_bytes = sector_count * disk->sector_size;//当前读取的字节数 = 扇区数 * 一个扇区的字节
+			write_buffer += curr_write_bytes;//read_buffer指针要做加法
+			bytes_to_write -= curr_write_bytes;
+		}
+
+		r_count_writed += curr_write_bytes; //更新实际读取的字节数
 
 
+		//删除
+		/*
+		//sector_offset += curr_write_bytes; //之前我们的offset是没有读取的时候的在扇区的偏移 (sector_offset指向的是第一个未读取的字节), 现在先加上我们已经读取的字节数
+		//								  //读取完之后, 我们要判断, 下一个读取的簇号是什么(是不需要更改, 还是需要更改). 下一个读取的扇区是什么(是否需要从0,1,2,3中从新归为成0), 下一个要读取的扇区的offset是什么(注意, 这里offset只有2种情况: 1.offset没有超过一个扇区大小,即还是当前扇区的中间字节, 2.offset变成了下一个扇区的第一个字节). 不存在那种: offset成为下一个扇区的中间字节)
+		//if (sector_offset >= disk->sector_size) { //如果字节数超出了扇区 (注意: 细节问题, 这里的sector_offset指向的是第一个未读取的字节, 假设我们一个扇区有3个字节, 索引分别是0,1,2, 在读取之前sector_offset = 1, 说明第2个字节没有被读取, 假设curr_read_bytes = 2, 说明读取了两个字节, 也就是index==1,2都读取了. 此时sector_offset += curr_read_bytes = 3, 也就是指向了下一个扇区的第一个字节, 也就是指向了第一个没有读取的字节.
+
+		//										  //另外, 如果走到这里, 说明我们是经历了上面的: 2,4,5,6. 也就是这里sector_offset要么<sector_size, 要么sector_offset == sector_size, 这里的if( >= )应该只是保守写法
+		//	sector_offset = 0; //既然是新的扇区的第一个字节, 所以要重新归为0
+		//	sector_in_cluster += sector_count;	//我们也要看下现在到了一个簇中的第几个扇区, sector_in_cluster的取值是0,1,2,3
+
+		//	if (sector_in_cluster >= file->xfat->sec_per_cluster) { //判断如果这个扇区已经越界了(例如 sector_in_cluster的取值变成了4. 注意, 这里不可能是5,6,7.., 因为sector_count的最大值只可能是4, 并且在line355读取扇区的时候, 我们是保证读取的多个扇区都是在同一个簇里面的), 也就是说应该读下一个簇了
+
+		//		sector_in_cluster = 0; //既然是新簇的第一个扇区, 我们就归为0
+		//		err = get_next_cluster(file->xfat, file->curr_cluster, &file->curr_cluster); //知道簇链中的下一个簇的簇号是多少
+		//		if (err != FS_ERR_OK) {
+		//			file->err = err;
+		//			return 0;
+		//		}
+		//	}
+		//}
+
+		////更新
+		//file->pos += curr_write_bytes;
+		*/
+
+		//4.12 调整file内部的pos指针
+		err = move_file_pos(file, curr_write_bytes);
+		if (err) return err;
+		//之后回到while
+	}
+
+	//从while出来之后, 我们想知道是因为我们要读的字节太多了, 导致没有这么多可读(也就是最后的簇号无效), 还是我们要读的字节都读完了.
+	//删除 file->err = is_cluster_valid(file->curr_cluster) ? FS_ERR_OK : FS_ERR_EOF;
+
+	file->err = file->pos == file->size; //4.12 如果相等, err == 1,说明有错误?
+
+	return r_count_writed / ele_size; //最终读取的有效字节数/元素的字节数 = 实际读取的元素数量
+}

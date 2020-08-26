@@ -44,6 +44,9 @@
 #define DIRITEM_GET_END					(1 << 3) //4.10 什么鬼?video中可不是 1<<3
 #define DIRITEM_GET_ALL					(0xFF)
 
+//4.12 只读属性
+#define XFILE_ATTR_READONLY				(1<<0)
+
 //4.11 定义需要修改的时间的字段,是枚举类型. set time type
 typedef enum _stime_type_t {
 	XFAT_TIME_ATIME,
@@ -242,6 +245,10 @@ xfat_err_t xfile_rename(xfat_t* xfat, const char* path, const char* new_name);
 xfat_err_t xfile_set_atime(xfat_t* xfat, const char* path, xfile_time_t* time);
 xfat_err_t xfile_set_mtime(xfat_t* xfat, const char* path, xfile_time_t* time);
 xfat_err_t xfile_set_ctime(xfat_t* xfat, const char* path, xfile_time_t* time);
+
+//4.12 写
+xfile_size_t xfile_write(void* buffer, xfile_size_t ele_size, xfile_size_t count, xfile_t* file); //读取元素的大小(ele_size), 读取多少个这样的元素(count), 
+
 
 #endif // !XFAT_H
 

@@ -786,7 +786,8 @@ static xfat_err_t move_file_pos(xfile_t* file, u32_t move_bytes) {
 	cluster_offset = to_cluster_offset(file->xfat, file->pos);
 
 	if (cluster_offset + to_move >= file->xfat->cluster_byte_size) {
-		xfat_err_t err = get_next_cluster(file->xfat, cluster_offset, &cluster_offset); //移动到下一个簇
+		//4.12 bug! 是更新簇号,不是更新cluster_offset
+		xfat_err_t err = get_next_cluster(file->xfat, file->curr_cluster, &file->curr_cluster); //移动到下一个簇
 		if (err != FS_ERR_OK) {
 			file->err = err;
 			return err;
@@ -1396,8 +1397,8 @@ xfile_size_t xfile_write(void* buffer, xfile_size_t ele_size, xfile_size_t count
 	//我们需要知道pos现在是第几个簇的第几个扇区的第几个偏移
 	xdisk_t* disk = file_get_disk(file); //从file获得disk
 	
-													   //是否还有要读的,并且, 判断当前簇是否是有效的
-	while ((bytes_to_write > 0) && is_cluster_valid(file->curr_cluster)) {
+	//4.12 bu判断当前簇是否是有效, delete: && is_cluster_valid(file->curr_cluster)
+	while ((bytes_to_write > 0) ) {
 		xfat_err_t err;
 		xfile_size_t curr_write_bytes = 0; //这里其实是u32_t. 所以能够代表2^32 = 4g个字节 = 4GB
 		u32_t sector_count = 0;
@@ -1457,6 +1458,13 @@ xfile_size_t xfile_write(void* buffer, xfile_size_t ele_size, xfile_size_t count
 			//将write_buffer中的内容,先写入temp_buffer中,具体写的位置是temp_buffer中的sector_offset
 			memcpy(temp_buffer + sector_offset, write_buffer, curr_write_bytes);
 
+			//4.12 bug, 忘记去写了
+			err = xdisk_write_sector(disk, temp_buffer, start_sector, 1);
+			if (err < 0) {
+				file->err = err;
+				return 0;
+			}
+
 			write_buffer += curr_write_bytes; //注意: read_buffer没有容量大小限制, 这里的加法是指针的加法
 
 			bytes_to_write -= curr_write_bytes; //因为已经读了curr_read_bytes, 所以要减去
@@ -1512,7 +1520,7 @@ xfile_size_t xfile_write(void* buffer, xfile_size_t ele_size, xfile_size_t count
 
 		//4.12 调整file内部的pos指针
 		err = move_file_pos(file, curr_write_bytes);
-		if (err) return err;
+		if (err) return 0;
 		//之后回到while
 	}
 
